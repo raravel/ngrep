@@ -1,0 +1,15 @@
+{
+  "name": "ngrep",
+  "version": "1.0.0",
+  "description": "Use javascript regex pattern in grep. ",
+  "scripts": {
+    "install": "tsc ngrep.ts && chmod 777 ngrep.js && sudo ln -sf `pwd`/ngrep.js /usr/bin/ngrep"
+  },
+  "author": "mobbing",
+  "license": "MIT",
+  "dependencies": {
+    "@types/node": "^12.12.16",
+    "tsc": "^1.20150623.0",
+    "typescript": "^3.7.3"
+  }
+}
