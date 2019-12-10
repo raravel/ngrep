@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Use javascript regex pattern in grep. ",
   "scripts": {
-    "install": "tsc ngrep.ts && chmod 777 ngrep.js && sudo ln -sf `pwd`/ngrep.js /usr/bin/ngrep"
+	"compile": "tsc ngrep.ts",
+    "install": "npm run compile && chmod 777 ngrep.js && sudo ln -sf `pwd`/ngrep.js /usr/bin/ngrep",
+	"start": "npm run compile && node ./ngrep.js"
   },
   "author": "mobbing",
   "license": "MIT",
