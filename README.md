@@ -7,7 +7,6 @@ First install ngrep:
 git clone https://github.com/mobbing/ngrep.git
 cd ngrep
 npm install
-npm run install
 ```
 
 You should have [nodejs](https://nodejs.org/ko/download/package-manager/) at least 8.x.
