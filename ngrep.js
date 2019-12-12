@@ -9,6 +9,8 @@ var RESET = "\x1b[0;0;0m";
 var searchPattern = null;
 var filePattern = [];
 var readStream = null;
+var beforeQ = [];
+var afterQ = [];
 var color = function (str, fg, bg) {
     if (bg === void 0) { bg = 0; }
     return fg_color(fg) + bg_color(bg) + str + RESET;
@@ -19,7 +21,9 @@ var g_options = {
     "line-number": false,
     "no-messages": false,
     "exclude": null,
-    "exclude-dir": null
+    "exclude-dir": null,
+    "before-context": 0,
+    "after-context": 0
 };
 var errorMsg = function (msg) {
     if (g_options['no-messages'] === false) {
@@ -33,12 +37,14 @@ var printErrorExit = function (msg) {
     errorMsg("       file:   file pattern javascript regex string");
     errorMsg("");
     errorMsg("Options");
-    errorMsg("  -i, --ignore-case       Ignore case distinctions in both the PATTERN and the input files.");
-    errorMsg("  -r, --recursive         Read  all  files  under each directory.");
-    errorMsg("  -n, --line-number       Prefix each line of output with the 1-based line number within its input file.");
-    errorMsg("  -s, --no-messages       Suppress error messages.");
-    errorMsg("  --exclude FILE_PATTERN  skip files and directories matching FILE_PATTERN");
-    errorMsg("  --exclude-dir PATTERN   directories that match PATTERN will be skipped.");
+    errorMsg("  -i, --ignore-case          Ignore case distinctions in both the PATTERN and the input files.");
+    errorMsg("  -r, --recursive            Read  all  files  under each directory.");
+    errorMsg("  -n, --line-number          Prefix each line of output with the 1-based line number within its input file.");
+    errorMsg("  -s, --no-messages          Suppress error messages.");
+    errorMsg("  --exclude FILE_PATTERN     skip files and directories matching FILE_PATTERN");
+    errorMsg("  --exclude-dir PATTERN      directories that match PATTERN will be skipped.");
+    errorMsg("  -b, --before-context NUM   print NUM lines of leading context.");
+    errorMsg("  -a, --after-context NUM    print NUM lines of trailing context.");
     process.exit();
 };
 var parsingArgv = function (argv) {
@@ -66,6 +72,12 @@ var parsingArgv = function (argv) {
                     case "--exclude-dir":
                         g_options['exclude-dir'] = argv[++i];
                         break;
+                    case "--before-context":
+                        g_options['before-context'] = parseInt(argv[++i], 10);
+                        break;
+                    case "--after-context":
+                        g_options['after-context'] = parseInt(argv[++i], 10);
+                        break;
                     default: printErrorExit('Invalid Options');
                 }
             }
@@ -85,6 +97,12 @@ var parsingArgv = function (argv) {
                             break;
                         case "s":
                             g_options['no-messages'] = true;
+                            break;
+                        case "B":
+                            g_options['before-context'] = parseInt(argv[++i], 10);
+                            break;
+                        case "A":
+                            g_options['after-context'] = parseInt(argv[++i], 10);
                             break;
                         default: printErrorExit('Invalid Options');
                     }
@@ -113,6 +131,13 @@ var pathJoin = function (p1, p2) {
     }
     return p1 + "/" + p2;
 };
+var mkLineStr = function (line, str, file) {
+    var s = color((line).toString(), 28) + color(str, 6) + " ";
+    if (file) {
+        return color(file, 5) + color(':', 6) + s;
+    }
+    return s;
+};
 var matchingLine = function (line, searchPattern, options, file, lineNumber) {
     if (file === void 0) { file = undefined; }
     if (lineNumber === void 0) { lineNumber = undefined; }
@@ -125,19 +150,52 @@ var matchingLine = function (line, searchPattern, options, file, lineNumber) {
         var m = line.replace(regex, BOLD + fg_color(11) + "$&" + RESET);
         var f = "";
         if (typeof file === "string" && typeof lineNumber === "number") {
-            f = color(file, 5) + color(':', 6) + color((lineNumber).toString(), 28) + color(':', 6) + " ";
+            // f = color(file, 5) + color(':', 6) + color((lineNumber).toString(), 28) + color(':', 6) + " ";
+            f = mkLineStr(lineNumber, ':', file);
         }
         return f + m;
     }
 };
 var realRunGrep = function (file, searchPattern, options) {
     var buf = fs.readFileSync(file, { encoding: 'utf8' });
-    buf.split('\n').forEach(function (line, idx) {
-        var m = matchingLine(line, searchPattern, options, file, idx + 1);
+    var buf_s = buf.split('\n');
+    var len = buf_s.length;
+    for (var i = 0; i < len; i++) {
+        var m = matchingLine(buf_s[i], searchPattern, options, file, i + 1);
         if (m && m.length > 0) {
+            // before print
+            if (g_options['before-context'] > 0) {
+                if (beforeQ.length > 0) {
+                    console.log(color('--', 6));
+                }
+                for (var bidx = 0; beforeQ.length > 0; bidx++) {
+                    var lineNumber = i - (g_options['before-context'] - bidx);
+                    console.log(mkLineStr(lineNumber, '-', file) + beforeQ.shift()); // pop in Q
+                }
+            }
+            // matching line print
             console.log(m);
+            // after print set
+            if (g_options['after-context'] > 0) {
+                g_force_print = g_options['after-context'];
+            }
         }
-    });
+        else if (g_force_print > 0) {
+            // after print
+            console.log(mkLineStr(i, '-', file) + buf_s[i]);
+            g_force_print--;
+        }
+        else {
+            // before stack q
+            if (g_options['before-context'] > 0) {
+                if (beforeQ.length >= g_options['before-context']) {
+                    beforeQ.shift();
+                }
+                beforeQ.push(buf_s[i]);
+            }
+        }
+    }
+    ;
 };
 var matchFile = function (fRegex, path, recursive) {
     var dirs = fs.readdirSync(path);
@@ -196,16 +254,49 @@ if (argv.length < 1) {
 }
 parsingArgv(argv);
 var regex = new RegExp(searchPattern, 'g');
-if (filePattern === undefined) {
+var g_force_print = 0;
+if (filePattern === undefined || filePattern.length === 0) {
     readStream = process.stdin;
     readStream.on('data', function (chunk) {
         var str = chunk.toString();
-        str.split('\n').forEach(function (c) {
-            var m = matchingLine(c, searchPattern, g_options);
+        var str_s = str.split('\n');
+        var len = str_s.length;
+        for (var i = 0; i < len; i++) {
+            var m = matchingLine(str_s[i], searchPattern, g_options);
             if (m && m.length > 0) {
-                console.log(m);
+                // before print
+                if (g_options['before-context'] > 0) {
+                    if (beforeQ.length > 0) {
+                        console.log(color('--', 6));
+                    }
+                    for (var bidx = 0; beforeQ.length > 0; bidx++) {
+                        var lineNumber = (i + 1) - (g_options['before-context'] - bidx);
+                        console.log(mkLineStr(lineNumber, '-') + beforeQ.shift()); // pop in Q
+                    }
+                }
+                // matching line print
+                console.log(mkLineStr(i + 1, ':') + m);
+                // after print set
+                if (g_options['after-context'] > 0) {
+                    g_force_print = g_options['after-context'];
+                }
             }
-        });
+            else if (g_force_print > 0) {
+                // after print
+                console.log(mkLineStr(i + 1, '-') + str_s[i]);
+                g_force_print--;
+            }
+            else {
+                // before stack q
+                if (g_options['before-context'] > 0) {
+                    if (beforeQ.length >= g_options['before-context']) {
+                        beforeQ.shift();
+                    }
+                    beforeQ.push(str_s[i]);
+                }
+            }
+        }
+        ;
     });
 }
 else {

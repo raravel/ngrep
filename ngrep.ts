@@ -10,18 +10,22 @@ const RESET = "\x1b[0;0;0m";
 let searchPattern = null; 
 let filePattern = [];
 let readStream = null;
+let beforeQ = [];
+let afterQ = [];
 
 const color = (str: String, fg: Number, bg: Number = 0) => {
 	return fg_color(fg) + bg_color(bg) + str + RESET;
 };
 
 const g_options = {
-	"ignore-case" : false,
-	"recursive"   : false,
-	"line-number" : false,
-	"no-messages" : false,
-	"exclude"     : null,
-	"exclude-dir" : null 
+	"ignore-case"    : false,
+	"recursive"      : false,
+	"line-number"    : false,
+	"no-messages"    : false,
+	"exclude"        : null,
+	"exclude-dir"    : null,
+	"before-context" : 0,
+	"after-context"  : 0
 };
 
 const errorMsg = (msg: String) => {
@@ -37,12 +41,14 @@ const printErrorExit = (msg: String) => {
 	errorMsg("       file:   file pattern javascript regex string");
 	errorMsg("");
 	errorMsg("Options");
-	errorMsg("  -i, --ignore-case       Ignore case distinctions in both the PATTERN and the input files.");
-	errorMsg("  -r, --recursive         Read  all  files  under each directory.");
-	errorMsg("  -n, --line-number       Prefix each line of output with the 1-based line number within its input file.");
-	errorMsg("  -s, --no-messages       Suppress error messages.");
-	errorMsg("  --exclude FILE_PATTERN  skip files and directories matching FILE_PATTERN");
-	errorMsg("  --exclude-dir PATTERN   directories that match PATTERN will be skipped.");
+	errorMsg("  -i, --ignore-case          Ignore case distinctions in both the PATTERN and the input files.");
+	errorMsg("  -r, --recursive            Read  all  files  under each directory.");
+	errorMsg("  -n, --line-number          Prefix each line of output with the 1-based line number within its input file.");
+	errorMsg("  -s, --no-messages          Suppress error messages.");
+	errorMsg("  --exclude FILE_PATTERN     skip files and directories matching FILE_PATTERN");
+	errorMsg("  --exclude-dir PATTERN      directories that match PATTERN will be skipped.");
+	errorMsg("  -b, --before-context NUM   print NUM lines of leading context.");
+	errorMsg("  -a, --after-context NUM    print NUM lines of trailing context.");
 	process.exit();
 };
 
@@ -59,6 +65,8 @@ const parsingArgv = (argv: Array<String>) => {
 					case "--no-messages": g_options['no-messages'] = true; break;
 					case "--exclude": g_options['exclude'] = argv[++i]; break;
 					case "--exclude-dir" : g_options['exclude-dir'] = argv[++i]; break;
+					case "--before-context" : g_options['before-context'] = parseInt(argv[++i] as string, 10); break;
+					case "--after-context" : g_options['after-context'] = parseInt(argv[++i] as string, 10); break;
 					default: printErrorExit('Invalid Options');
 				}
 			} else {
@@ -70,6 +78,8 @@ const parsingArgv = (argv: Array<String>) => {
 						case "r": g_options['recursive'] = true; break;
 						case "n": g_options['line-number'] = true; break;
 						case "s": g_options['no-messages'] = true; break;
+						case "B": g_options['before-context'] = parseInt(argv[++i] as string, 10); break;
+						case "A": g_options['after-context'] = parseInt(argv[++i] as string, 10); break;
 						default: printErrorExit('Invalid Options');
 					}
 				}
@@ -99,6 +109,14 @@ const pathJoin = (p1: String, p2: String) => {
 	return p1+"/"+p2;
 };
 
+const mkLineStr = (line: Number, str: String, file?: String) => {
+	let s = color((line).toString(), 28) + color(str, 6) + " ";
+	if ( file ) {
+		return color(file, 5) + color(':', 6) + s;
+	}
+	return s;
+}
+
 const matchingLine = (line: string, searchPattern: string, options: Object, file:String | undefined = undefined, lineNumber:Number | undefined = undefined) => {
 	let flag = 'g';
 	if ( options['ignore-case'] ) {
@@ -110,7 +128,8 @@ const matchingLine = (line: string, searchPattern: string, options: Object, file
 		let f = "";
 
 		if ( typeof file === "string" && typeof lineNumber === "number" ) {
-			f = color(file, 5) + color(':', 6) + color((lineNumber).toString(), 28) + color(':', 6) + " ";
+			// f = color(file, 5) + color(':', 6) + color((lineNumber).toString(), 28) + color(':', 6) + " ";
+			f = mkLineStr(lineNumber, ':', file);
 		}
 		return f + m;
 	}
@@ -118,12 +137,43 @@ const matchingLine = (line: string, searchPattern: string, options: Object, file
 
 const realRunGrep = (file: string, searchPattern: string, options: Object) => {
 	let buf = fs.readFileSync(file, {encoding: 'utf8'});
-	buf.split('\n').forEach((line, idx) => {
-		let m = matchingLine(line, searchPattern, options, file, idx+1);
+	let buf_s = buf.split('\n');
+	let len = buf_s.length;
+	for(let i=0;i < len;i++) {
+		let m = matchingLine(buf_s[i], searchPattern, options, file, i+1);
 		if ( m && m.length > 0 ) {
+			// before print
+			if ( g_options['before-context'] > 0 ) {
+				if ( beforeQ.length > 0 ) {
+					console.log(color('--', 6));
+				}
+				for (let bidx = 0;beforeQ.length > 0; bidx++ ) {
+					let lineNumber = i - ( g_options['before-context'] - bidx );
+					console.log(mkLineStr(lineNumber, '-', file) + beforeQ.shift()); // pop in Q
+				}
+			}
+
+			// matching line print
 			console.log(m);
+
+			// after print set
+			if ( g_options['after-context'] > 0 ) {
+				g_force_print = g_options['after-context'];
+			}
+		} else if ( g_force_print > 0 ) {
+			// after print
+			console.log(mkLineStr(i, '-', file) + buf_s[i]);
+			g_force_print--;
+		} else {
+			// before stack q
+			if ( g_options['before-context'] > 0 ) {
+				if ( beforeQ.length >= g_options['before-context'] ) {
+					beforeQ.shift();
+				}
+				beforeQ.push(buf_s[i]);
+			}
 		}
-	});
+	};
 };
 
 const matchFile = (fRegex: RegExp, path: String, recursive: Boolean) => {
@@ -190,17 +240,49 @@ if ( argv.length < 1 ) {
 parsingArgv(argv);
 
 let regex = new RegExp(searchPattern, 'g');
+let g_force_print = 0;
 
-if ( filePattern === undefined ) {
+if ( filePattern === undefined || filePattern.length === 0 ) {
 	readStream = process.stdin;
 	readStream.on('data', (chunk: String) => {
 		let str = chunk.toString();
-		str.split('\n').forEach(c => {
-			let m = matchingLine(c, searchPattern, g_options);
+		let str_s = str.split('\n');
+		let len = str_s.length;
+		for (let i = 0;i < len;i++) {
+			let m = matchingLine(str_s[i], searchPattern, g_options);
 			if ( m && m.length > 0 ) {
-				console.log(m);
+				// before print
+				if ( g_options['before-context'] > 0 ) {
+					if ( beforeQ.length > 0 ) {
+						console.log(color('--', 6));
+					}
+					for (let bidx = 0;beforeQ.length > 0; bidx++ ) {
+						let lineNumber = (i+1) - ( g_options['before-context'] - bidx );
+						console.log(mkLineStr(lineNumber, '-') + beforeQ.shift()); // pop in Q
+					}
+				}
+
+				// matching line print
+				console.log(mkLineStr(i+1, ':') + m);
+
+				// after print set
+				if ( g_options['after-context'] > 0 ) {
+					g_force_print = g_options['after-context'];
+				}
+			} else if ( g_force_print > 0 ) {
+				// after print
+				console.log(mkLineStr(i+1, '-') + str_s[i]);
+				g_force_print--;
+			} else {
+				// before stack q
+				if ( g_options['before-context'] > 0 ) {
+					if ( beforeQ.length >= g_options['before-context'] ) {
+						beforeQ.shift();
+					}
+					beforeQ.push(str_s[i]);
+				}
 			}
-		});
+		};
 	});
 } else {
 	grep(filePattern, searchPattern, './', g_options);
