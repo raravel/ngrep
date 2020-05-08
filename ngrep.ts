@@ -25,7 +25,9 @@ const g_options = {
 	"exclude"        : null,
 	"exclude-dir"    : null,
 	"before-context" : 0,
-	"after-context"  : 0
+	"after-context"  : 0,
+	"include-hidden" : false,
+	"include"        : null,
 };
 
 const errorMsg = (msg: String) => {
@@ -45,10 +47,12 @@ const printErrorExit = (msg: String) => {
 	errorMsg("  -r, --recursive            Read  all  files  under each directory.");
 	errorMsg("  -n, --line-number          Prefix each line of output with the 1-based line number within its input file.");
 	errorMsg("  -s, --no-messages          Suppress error messages.");
-	errorMsg("  --exclude FILE_PATTERN     skip files and directories matching FILE_PATTERN");
-	errorMsg("  --exclude-dir PATTERN      directories that match PATTERN will be skipped.");
+	errorMsg("  --include=FILE_PATTERN     skip files and directories matching FILE_PATTERN");
+	errorMsg("  --exclude=FILE_PATTERN     skip files and directories matching FILE_PATTERN");
+	errorMsg("  --exclude-dir=PATTERN      directories that match PATTERN will be skipped.");
 	errorMsg("  -b, --before-context NUM   print NUM lines of leading context.");
 	errorMsg("  -a, --after-context NUM    print NUM lines of trailing context.");
+	errorMsg("  -H, --include-hidden       Include search pattern, hidden file or folder.");
 	process.exit();
 };
 
@@ -58,17 +62,26 @@ const parsingArgv = (argv: Array<String>) => {
 		if ( argv[i][0] === "-" ) {
 			if ( argv[i][1] && argv[i][1] === "-" ) {
 				// --[option]
-				switch ( argv[i] ) {
-					case "--ignore-case": g_options['ignore-case'] = true; break;
-					case "--recursive": g_options['recursive'] = true; break;
-					case "--line-number": g_options['line-number'] = true; break;
-					case "--no-messages": g_options['no-messages'] = true; break;
-					case "--exclude": g_options['exclude'] = argv[++i]; break;
-					case "--exclude-dir" : g_options['exclude-dir'] = argv[++i]; break;
-					case "--before-context" : g_options['before-context'] = parseInt(argv[++i] as string, 10); break;
-					case "--after-context" : g_options['after-context'] = parseInt(argv[++i] as string, 10); break;
-					default: printErrorExit('Invalid Options');
+
+				if ( argv[i].match(/--exclude=/) ) {
+					g_options['exclude'] = argv[i].replace(/--exclude=/, "");
+				} else if ( argv[i].match(/--exclude-dir=/) ) {
+					g_options['exclude-dir'] = argv[i].replace(/--exclude-dir=/, "");
+				} else if ( argv[i].match(/--include=/) ) {
+					g_options['include'] = argv[i].replace(/--include=/, "");
+				} else {
+					switch ( argv[i] ) {
+						case "--ignore-case": g_options['ignore-case'] = true; break;
+						case "--recursive": g_options['recursive'] = true; break;
+						case "--line-number": g_options['line-number'] = true; break;
+						case "--no-messages": g_options['no-messages'] = true; break;
+						case "--before-context" : g_options['before-context'] = parseInt(argv[++i] as string, 10); break;
+						case "--after-context" : g_options['after-context'] = parseInt(argv[++i] as string, 10); break;
+						case "--include-hidden" : g_options['include-hidden'] = true; break;
+						default: printErrorExit('Invalid Options');
+					}
 				}
+
 			} else {
 				// -[options]
 				let len = argv[i].length;
@@ -80,6 +93,7 @@ const parsingArgv = (argv: Array<String>) => {
 						case "s": g_options['no-messages'] = true; break;
 						case "B": g_options['before-context'] = parseInt(argv[++i] as string, 10); break;
 						case "A": g_options['after-context'] = parseInt(argv[++i] as string, 10); break;
+						case "H": g_options['include-hidden'] = true; break;
 						default: printErrorExit('Invalid Options');
 					}
 				}
@@ -176,11 +190,21 @@ const realRunGrep = (file: string, searchPattern: string, options: Object) => {
 	};
 };
 
+const isHiddenPath = (path: String) => {
+	let tmp = path.replace(/(\.{0,1}\/|)/, "");
+	return tmp[0] === ".";
+};
+
 const matchFile = (fRegex: RegExp, path: String, recursive: Boolean) => {
 	let dirs = fs.readdirSync(path as fs.PathLike);
 	let retDirs = [];
 	dirs.forEach(d => {
 		let target = pathJoin(path, d);
+
+		if ( !g_options['include-hidden'] && isHiddenPath(target) ) {
+			return;
+		}
+
 		let stat = fs.lstatSync(target as fs.PathLike);
 		if ( stat.isDirectory() ) {
 			let excludeDir = g_options['exclude-dir'];
@@ -203,6 +227,14 @@ const matchFile = (fRegex: RegExp, path: String, recursive: Boolean) => {
 			if ( exclude ) {
 				let eRegex = new RegExp(exclude, 'i');
 				if ( d.match(eRegex) ) {
+					isExclude = true;
+				}
+			}
+
+			let include = g_options['include'];
+			if ( include ) {
+				let iRegex = new RegExp(include, 'i');
+				if ( !d.match(iRegex) ) {
 					isExclude = true;
 				}
 			}
@@ -239,10 +271,9 @@ if ( argv.length < 1 ) {
 }
 parsingArgv(argv);
 
-let regex = new RegExp(searchPattern, 'g');
 let g_force_print = 0;
 
-if ( filePattern === undefined || filePattern.length === 0 ) {
+if ( (filePattern === undefined || filePattern.length === 0) && !g_options['recursive'] ) {
 	readStream = process.stdin;
 	readStream.on('data', (chunk: String) => {
 		let str = chunk.toString();
@@ -285,6 +316,9 @@ if ( filePattern === undefined || filePattern.length === 0 ) {
 		};
 	});
 } else {
+	if ( (filePattern === undefined || filePattern.length === 0) ) {
+		filePattern.push(".*");
+	}
 	grep(filePattern, searchPattern, './', g_options);
 }
 
